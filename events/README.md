@@ -200,11 +200,11 @@ node tools/register-event.mjs <id> --dry-run   # 검사만 (DB에 접속하지 �
   "admin_passcode": "",
   "reveal": {
     "ox1": {
-      "answers": ["O", "X", "O"],
-      "labels": ["AI", "사람", "사람 + AI 협업"],
+      "answers": ["X", "O", "X"],
+      "labels": ["사람", "AI", "사람"],
       "notes": ["해설 하나", "해설 둘", "해설 셋"],
       "panel": [
-        { "name": "패널 이름", "desc": "한 줄 소개", "picks": ["O", "O", "O"], "score": "2/3" }
+        { "name": "패널 이름", "desc": "한 줄 소개", "picks": ["X", "O", "O"], "score": "2/3" }
       ]
     }
   }
