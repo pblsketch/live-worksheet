@@ -58,6 +58,7 @@ node tools/register-event.mjs <id> --dry-run   # 검사만 (DB에 접속하지 �
 | 칸 | 필수 | 형식 |
 |---|---|---|
 | `questions` | 필수 | 문항 문장 배열(N개, 1개 이상) |
+| `choices` | 선택 | `{ "O": "…", "X": "…" }` O·X 버튼 아래에 붙는 짧은 설명(예: `"O": "AI가 썼다"`). 없으면 O·X만 보인다 |
 
 정답은 비밀 파일의 `reveal.<활동 id>`에 둔다.
 
@@ -152,6 +153,7 @@ node tools/register-event.mjs <id> --dry-run   # 검사만 (DB에 접속하지 �
       "type": "ox",
       "title": "사람일까, AI일까?",
       "description": "문장마다 AI가 썼다고 생각하면 O, 사람이 썼다고 생각하면 X를 고르세요.",
+      "choices": { "O": "AI가 썼다", "X": "사람이 썼다" },
       "questions": ["문장 하나", "문장 둘", "문장 셋"]
     },
     {

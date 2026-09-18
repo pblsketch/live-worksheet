@@ -1,0 +1,43 @@
+/**
+ * E2E 공용 도구: 실제 DB에 시험 연수(t-…-e2e)를 등록하고 끝나면 지운다.
+ * 등록은 저장소의 등록 명령(tools/register-event.mjs)을 그대로 쓰고,
+ * 지우기는 DB 검사와 같은 도구(관리 API)로 한다. 토큰은 .env.local 에서 도구가 직접 읽는다.
+ */
+import {
+  testId, testPasscode, tmpDir, removeDir, samplePublic, sampleSecret,
+  writeEventFiles, registerCli, deleteEvents, runSql
+} from '../db/helpers.mjs';
+
+/**
+ * events/sample.json 으로 시험 연수를 만든다(관리자 암호는 새로 만든 것).
+ * 등록 중에 실패해도 만든 것은 지운다.
+ * @returns {Promise<{ id: string, passcode: string, title: string }>}
+ */
+export async function createTestEvent(tag = 'e2e') {
+  const id = testId(tag);
+  const passcode = testPasscode();
+  const dir = tmpDir();
+  const pub = samplePublic(id);
+  try {
+    writeEventFiles(dir, id, pub, sampleSecret(passcode));
+    const r = registerCli(id, dir);
+    if (r.code !== 0) throw new Error(`시험 연수 등록 실패 (종료 코드 ${r.code}): ${r.stderr.slice(0, 500)}`);
+  } catch (e) {
+    await deleteEvents([id]).catch(() => {});
+    throw e;
+  } finally {
+    removeDir(dir);
+  }
+  return { id, passcode, title: pub.title };
+}
+
+export async function deleteTestEvent(id) {
+  await deleteEvents([id]);
+}
+
+/** 강제로 끊긴 지난 실행이 남긴 E2E 시험 연수(2시간 넘은 것)를 지운다 */
+export async function sweepStaleTestEvents() {
+  await runSql(
+    "delete from public.lw_events where id like 't-%-e2e' and created_at < now() - interval '2 hours'"
+  );
+}

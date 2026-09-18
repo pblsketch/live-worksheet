@@ -19,7 +19,7 @@ export const ACTIVITY_TYPES = ['ox', 'stage_check', 'sentence'];
 const TOP_KEYS = ['id', 'title', 'date', 'listed', 'description', 'activities', 'materials'];
 const COMMON_ACTIVITY_KEYS = ['id', 'type', 'title', 'description'];
 const TYPE_KEYS = {
-  ox: ['questions'],
+  ox: ['questions', 'choices'],
   stage_check: ['items', 'objectives', 'allowCustom', 'criteria', 'example', 'stages'],
   sentence: ['templates']
 };
@@ -72,6 +72,13 @@ function checkOx(a, p, errors) {
   a.questions.forEach((q, i) => {
     if (!nonEmpty(q)) errors.push(`${p}.questions[${i}]: 문항은 비어 있지 않은 문자열이어야 합니다.`);
   });
+  if (a.choices !== undefined) {
+    if (!isObj(a.choices)) errors.push(`${p}.choices: { "O": "…", "X": "…" } 형식이어야 합니다.`);
+    else for (const [k, v] of Object.entries(a.choices)) {
+      if (k !== 'O' && k !== 'X') errors.push(`${p}.choices.${k}: O 또는 X 만 쓸 수 있습니다.`);
+      else if (!isStr(v)) errors.push(`${p}.choices.${k}: 문자열이어야 합니다.`);
+    }
+  }
 }
 
 function checkStageCheck(a, p, errors) {

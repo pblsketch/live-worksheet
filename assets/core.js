@@ -1,0 +1,382 @@
+/**
+ * live-worksheet 공용 코어 (참가자·관리자 화면과 현황판이 함께 쓴다)
+ *
+ * - api      : 서버 함수(RPC)와 공개 표 읽기. publishable key만 쓴다.
+ * - Live     : 연수 하나의 데이터(설정·진행 설정·공개 내용·참가자·응답)를 들고
+ *              실시간 방송(event_id 필터)으로 갱신한다. 실시간이 안 되면 20초마다 다시 불러온다.
+ * - 저장소   : 기기에 남기는 참가자 id·관리자 암호·입력 중 내용.
+ * - 글 도우미: esc(모든 글 이스케이프), rich(설정 문구의 <b>만 살림), len(코드 포인트 글자 수)
+ */
+import { CONFIG } from './config.js';
+
+/* ───────────── 글 도우미 ───────────── */
+
+const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+
+/** 참가자가 입력한 글을 포함해 모든 글은 이것으로 이스케이프해서 그린다 */
+export function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ESC[c]);
+}
+
+/** 연수 설정 문구: 이스케이프한 뒤 <b>, </b> 만 되살린다 */
+export function rich(s) {
+  return esc(s).replace(/&lt;(\/?)b&gt;/g, '<$1b>');
+}
+
+/** 글자 수(코드 포인트). 서버와 같은 방식으로 센다 */
+export function len(s) {
+  return [...String(s == null ? '' : s)].length;
+}
+
+/** 앞뒤 공백을 떼고 연속 공백을 하나로 (서버의 정리 방식과 같다) */
+export function oneLine(s) {
+  return String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
+}
+
+/* ───────────── 서버 호출 ───────────── */
+
+export class ApiError extends Error {
+  constructor(message, { network = false, status = 0 } = {}) {
+    super(message);
+    this.network = network;
+    this.status = status;
+  }
+}
+
+async function request(path, { method = 'GET', body, timeout = 12000 } = {}) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeout);
+  try {
+    let res;
+    try {
+      res = await fetch(CONFIG.supabaseUrl + path, {
+        method,
+        cache: 'no-store',
+        signal: ctrl.signal,
+        headers: {
+          apikey: CONFIG.supabaseKey,
+          Authorization: `Bearer ${CONFIG.supabaseKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: body === undefined ? undefined : JSON.stringify(body)
+      });
+    } catch (e) {
+      throw new ApiError('연결이 불안정합니다.', { network: true });
+    }
+    const text = await res.text();
+    let data = text;
+    try { data = JSON.parse(text); } catch { /* 본문 그대로 */ }
+    if (!res.ok) throw new ApiError(`서버 오류 (${res.status})`, { status: res.status });
+    return data;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** 읽기 전용 호출은 연결 오류일 때 한 번 더 해 본다 */
+async function withRetry(fn) {
+  try { return await fn(); } catch (e) {
+    if (!(e instanceof ApiError) || !e.network) throw e;
+    await new Promise((r) => setTimeout(r, 800));
+    return fn();
+  }
+}
+
+export const api = {
+  /** 서버 함수. 실패도 {ok:false, code, msg} 로 돌아온다(연결 오류만 예외) */
+  rpc(fn, args = {}, { retry = false } = {}) {
+    const go = () => request(`/rest/v1/rpc/${fn}`, { method: 'POST', body: args });
+    return retry ? withRetry(go) : go();
+  },
+  /** 공개 표 읽기. pathAndQuery 예: 'lw_settings?select=key,value&event_id=eq.x' */
+  get(pathAndQuery) {
+    return withRetry(() => request(`/rest/v1/${pathAndQuery}`));
+  },
+  getEvent(eventId) {
+    return this.rpc('lw_get_event', { p_event_id: eventId }, { retry: true });
+  },
+  listedEvents() {
+    return this.get('lw_events?select=id,title,date&listed=is.true&order=date.desc');
+  }
+};
+
+/* ───────────── 기기 저장소 ───────────── */
+
+function safe(storageName) {
+  return {
+    get(k) { try { return window[storageName].getItem(k); } catch { return null; } },
+    set(k, v) { try { window[storageName].setItem(k, v); } catch { /* 저장 불가(사생활 보호 모드 등) */ } },
+    del(k) { try { window[storageName].removeItem(k); } catch { /* 무시 */ } }
+  };
+}
+export const local = safe('localStorage');
+export const session = safe('sessionStorage');
+
+export const keys = {
+  participant: (eventId) => `lw:${eventId}:pid`,
+  admin: (eventId) => `lw:${eventId}:admin`,
+  draft: (eventId, activityId) => `lw:${eventId}:draft:${activityId}`,
+  peek: (eventId) => `lw:${eventId}:peek`
+};
+
+/** 활동별 입력 중 내용(자동 저장) */
+export function draftStore(eventId, activityId) {
+  const k = keys.draft(eventId, activityId);
+  return {
+    load() {
+      const raw = local.get(k);
+      if (!raw) return null;
+      try { return JSON.parse(raw); } catch { return null; }
+    },
+    save(obj) { local.set(k, JSON.stringify(obj)); },
+    clear() { local.del(k); }
+  };
+}
+
+/* ───────────── 연수 데이터와 실시간 ───────────── */
+
+const TABLE_KIND = { lw_settings: 'settings', lw_participants: 'participants', lw_responses: 'responses' };
+const SAFETY_POLL_MS = 60000; // 실시간이 붙어 있어도 가끔 진행 설정을 다시 확인한다
+
+/**
+ * 연수 하나의 데이터.
+ *   data.event        공개 설정(id, title, date, description, activities, materials)
+ *   data.settings     { '<key>': 'Y'|'N' }
+ *   data.reveal       { '<ox 활동 id>': { answers, labels?, notes?, panel? } } (공개된 것만)
+ *   data.participants [{ id, name, created_at, last_seen }] | null (필요할 때만 불러온다)
+ *   data.responses    [{ activity_id, participant_id, payload, created_at, updated_at }] | null
+ * 바뀌면 on() 으로 등록한 함수를 부른다: fn(changed:Set<'settings'|'event'|'participants'|'responses'|'status'>)
+ */
+export class Live {
+  constructor(eventId) {
+    this.eventId = eventId;
+    this.data = { event: null, settings: {}, reveal: {}, participants: null, responses: null };
+    this.status = 'connecting'; // 'live' | 'poll' | 'connecting'
+    this.needs = new Set();
+    this.listeners = new Set();
+    this.timers = {};
+    this.lastSettingsAt = 0;
+    this.channel = null;
+    this.client = null;
+    this.started = false;
+  }
+
+  on(fn) {
+    this.listeners.add(fn);
+    return () => this.listeners.delete(fn);
+  }
+
+  emit(changed) {
+    if (!changed.size) return;
+    for (const fn of [...this.listeners]) {
+      try { fn(changed); } catch (e) { console.error(e); }
+    }
+  }
+
+  /** 처음 불러오기. lw_get_event 결과를 그대로 돌려준다(ok:false 포함) */
+  async load() {
+    const r = await api.getEvent(this.eventId);
+    if (r && r.ok) this.applyEvent(r);
+    return r;
+  }
+
+  applyEvent(r) {
+    const changed = new Set();
+    const ev = JSON.stringify(r.event);
+    if (ev !== JSON.stringify(this.data.event)) { this.data.event = r.event; changed.add('event'); }
+    const st = JSON.stringify([r.settings || {}, r.reveal || {}]);
+    if (st !== JSON.stringify([this.data.settings, this.data.reveal])) {
+      this.data.settings = r.settings || {};
+      this.data.reveal = r.reveal || {};
+      changed.add('settings');
+    }
+    this.lastSettingsAt = Date.now();
+    return changed;
+  }
+
+  isOpen(key) { return this.data.settings[key] === 'Y'; }
+
+  /** 이 화면에 필요한 데이터 종류. 새로 필요해진 것은 바로 불러온다 */
+  need(kinds) {
+    const next = new Set(kinds);
+    const fresh = [...next].filter((k) => !this.needs.has(k) || this.data[k] === null);
+    this.needs = next;
+    if (fresh.length) this.refresh(fresh);
+  }
+
+  /** 실시간 연결과 재조회 타이머를 켠다 */
+  start() {
+    if (this.started) return;
+    this.started = true;
+    this.connect();
+    this.timers.poll = setInterval(() => this.tick(), CONFIG.pollMs);
+    this.onVisible = () => { if (document.visibilityState === 'visible') this.refreshAll(); };
+    this.onOnline = () => this.refreshAll();
+    document.addEventListener('visibilitychange', this.onVisible);
+    window.addEventListener('online', this.onOnline);
+  }
+
+  stop() {
+    this.started = false;
+    clearInterval(this.timers.poll);
+    for (const k of Object.keys(this.timers)) clearTimeout(this.timers[k]);
+    this.timers = {};
+    if (this.onVisible) document.removeEventListener('visibilitychange', this.onVisible);
+    if (this.onOnline) window.removeEventListener('online', this.onOnline);
+    if (this.channel && this.client) {
+      try { this.client.removeChannel(this.channel); } catch { /* 무시 */ }
+    }
+    this.channel = null;
+  }
+
+  connect() {
+    const lib = window.supabase;
+    if (!lib || typeof lib.createClient !== 'function') {
+      this.setStatus('poll'); // 실시간 라이브러리를 못 받았으면 재조회로만 간다
+      return;
+    }
+    try {
+      this.client = this.client || lib.createClient(CONFIG.supabaseUrl, CONFIG.supabaseKey, {
+        auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+        realtime: { params: { eventsPerSecond: 10 } }
+      });
+      const filter = `event_id=eq.${this.eventId}`;
+      let ch = this.client.channel(`lw-${this.eventId}-${Math.random().toString(36).slice(2, 8)}`);
+      for (const table of Object.keys(TABLE_KIND)) {
+        ch = ch.on('postgres_changes', { event: '*', schema: 'public', table, filter }, (msg) => {
+          // 참가자 행은 제출할 때마다 last_seen 만 바뀐다. 알고 있는 이름 그대로면 다시 받지 않는다
+          if (table === 'lw_participants' && msg && msg.eventType === 'UPDATE' && msg.new && this.data.participants) {
+            const known = this.data.participants.find((p) => p.id === msg.new.id);
+            if (known && known.name === msg.new.name) return;
+          }
+          this.poke(TABLE_KIND[table]);
+        });
+      }
+      this.channel = ch.subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          const was = this.status;
+          this.setStatus('live');
+          // 붙기 전에 지나간 변경이 있을 수 있으니 한 번 다시 불러온다
+          if (was !== 'live') this.refreshAll();
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+          this.setStatus('poll');
+        }
+      });
+    } catch (e) {
+      console.error(e);
+      this.setStatus('poll');
+    }
+  }
+
+  setStatus(s) {
+    if (this.status === s) return;
+    this.status = s;
+    try { document.body.dataset.live = s; } catch { /* 무시 */ }
+    this.emit(new Set(['status']));
+  }
+
+  tick() {
+    // 실시간이 안 되면 매번, 붙어 있어도 가끔은 다시 불러와 빠진 알림을 메운다
+    if (this.status !== 'live' || Date.now() - this.lastSettingsAt > SAFETY_POLL_MS) this.refreshAll();
+  }
+
+  refreshAll() {
+    this.refresh(['settings', ...this.needs]);
+  }
+
+  /** 실시간 알림: 짧게 모았다가 다시 불러온다 */
+  poke(kind) {
+    if (kind !== 'settings' && !this.needs.has(kind)) {
+      this.data[kind] = null; // 지금 안 쓰는 데이터는 버려 두고, 다시 필요할 때 새로 받는다
+      return;
+    }
+    clearTimeout(this.timers[kind]);
+    this.timers[kind] = setTimeout(() => this.refresh([kind]), 250);
+  }
+
+  /** 다시 불러온다. 같은 종류를 받는 중이면 끝난 뒤에 한 번 더 받는다(겹쳐 부르지 않는다) */
+  async refresh(kinds) {
+    const changed = new Set();
+    await Promise.all([...new Set(kinds)].map((kind) => this.fetchKind(kind, changed)));
+    this.emit(changed);
+  }
+
+  fetchKind(kind, changed) {
+    this.inflight = this.inflight || {};
+    this.again = this.again || {};
+    if (this.inflight[kind]) {
+      this.again[kind] = true;
+      return this.inflight[kind];
+    }
+    const run = async () => {
+      do {
+        this.again[kind] = false;
+        await this.fetchOnce(kind, changed);
+      } while (this.again[kind]);
+    };
+    this.inflight[kind] = run().finally(() => { this.inflight[kind] = null; });
+    return this.inflight[kind];
+  }
+
+  async fetchOnce(kind, changed) {
+    try {
+      if (kind === 'settings') {
+        const r = await api.getEvent(this.eventId);
+        if (r && r.ok) for (const c of this.applyEvent(r)) changed.add(c);
+      } else if (kind === 'participants') {
+        const rows = await api.get(
+          `lw_participants?select=id,name,created_at,last_seen&event_id=eq.${encodeURIComponent(this.eventId)}&order=created_at.asc`);
+        if (Array.isArray(rows) && JSON.stringify(rows) !== JSON.stringify(this.data.participants)) {
+          this.data.participants = rows;
+          changed.add('participants');
+        }
+      } else if (kind === 'responses') {
+        const rows = await api.get(
+          `lw_responses?select=activity_id,participant_id,payload,created_at,updated_at&event_id=eq.${encodeURIComponent(this.eventId)}&order=updated_at.desc`);
+        if (Array.isArray(rows) && JSON.stringify(rows) !== JSON.stringify(this.data.responses)) {
+          this.data.responses = rows;
+          changed.add('responses');
+        }
+      }
+    } catch (e) {
+      // 연결 오류는 다음 재조회 때 다시 해 본다
+      if (!(e instanceof ApiError)) console.error(e);
+    }
+  }
+
+  /* ─── 계산 도우미 ─── */
+
+  /** 활동 하나의 응답들(최근 제출 순) */
+  rowsFor(activityId) {
+    const rows = this.data.responses;
+    return rows ? rows.filter((r) => r.activity_id === activityId) : null;
+  }
+
+  /** 참가자 id → 이름 */
+  names() {
+    const m = new Map();
+    for (const p of this.data.participants || []) m.set(p.id, p.name);
+    return m;
+  }
+}
+
+/** 연결 상태 한 줄 */
+export function statusLabel(status) {
+  if (status === 'live') return '실시간';
+  if (status === 'poll') return `${Math.round(CONFIG.pollMs / 1000)}초마다 새로 고침`;
+  return '연결 중';
+}
+
+/** 주소의 ?e= 값 */
+export function eventIdFromUrl() {
+  const v = new URLSearchParams(location.search).get('e');
+  return v ? v.trim() : '';
+}
+
+/** 날짜 'YYYY-MM-DD' → 'YYYY. M. D.' */
+export function fmtDate(d) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(d || ''));
+  return m ? `${m[1]}. ${Number(m[2])}. ${Number(m[3])}.` : '';
+}
+
+export { CONFIG };
