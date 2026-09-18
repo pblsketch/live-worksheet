@@ -17,7 +17,13 @@
  *   adminResponse(ctx, row)  '지금 들어온 응답'에 보일 원문 HTML
  *   adminCell(ctx, row)      참가자 표 칸(제출했을 때). 기본 '✓'
  *                   관리자 ctx: { event, activity, index, isOpen, reveal, rows, names }
- *   board           현황판 화면 자리(T4가 채운다). 지금은 null
+ *   board(ctx) → { update(ctx), destroy(), onKey?(key) → boolean }
+ *                   현황판 화면(board.html). ctx.root 안에 그린다. 데이터가 바뀌면 update(ctx)가 불린다.
+ *                   onKey 는 ← → F 말고 남은 키('ArrowUp'·'ArrowDown')를 받는다. 쓰면 true 를 돌려준다.
+ *                   ctx: { root, event, activity, index, isOpen, reveal, rows, names, participants, keep }
+ *                     rows  이 활동의 응답(최근 제출 순). 불러오는 중이면 null
+ *                     keep  화면을 넘겼다 돌아와도 남는 부품별 기억(보고 있던 보기 등)
+ *                   정답·점수는 reveal 이 있을 때(공개된 뒤)만 그린다.
  */
 import ox from './ox.js';
 import stageCheck from './stage_check.js';

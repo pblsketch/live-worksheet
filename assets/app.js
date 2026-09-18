@@ -614,7 +614,7 @@ function drawAdmin() {
     return `<div class="gcard${on ? ' on' : ''}" data-card="${esc(a.id)}">` +
       `<div class="gh"><span class="gn">${circ(i)}</span><span class="gt">${esc(a.title)}</span>` +
       `<span class="gstate">${on ? '열림' : '닫힘'}</span></div>` +
-      `<div class="gd">${esc(mod ? `${mod.typeLabel} · ${mod.summary(a)}` : `알 수 없는 종류 ${a.type}`)}</div>` +
+      `<div class="gd">${esc(mod ? (mod.summary(a).startsWith(mod.typeLabel) ? mod.summary(a) : `${mod.typeLabel} · ${mod.summary(a)}`) : `알 수 없는 종류 ${a.type}`)}</div>` +
       `<div class="gnum">${c}<small> / ${N}명</small></div>` +
       `<div class="gtrack"><i style="width:${pct}%"></i></div>` +
       (extra ? `<div class="gextra">${extra}</div>` : '') +

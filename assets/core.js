@@ -152,6 +152,7 @@ export class Live {
     this.eventId = eventId;
     this.data = { event: null, settings: {}, reveal: {}, participants: null, responses: null };
     this.status = 'connecting'; // 'live' | 'poll' | 'connecting'
+    this.netFail = false;       // 마지막 불러오기가 연결 오류로 실패했는가
     this.needs = new Set();
     this.listeners = new Set();
     this.timers = {};
@@ -211,9 +212,11 @@ export class Live {
     this.connect();
     this.timers.poll = setInterval(() => this.tick(), CONFIG.pollMs);
     this.onVisible = () => { if (document.visibilityState === 'visible') this.refreshAll(); };
-    this.onOnline = () => this.refreshAll();
+    this.onOnline = () => { this.emit(new Set(['status'])); this.refreshAll(); };
+    this.onOffline = () => this.emit(new Set(['status']));
     document.addEventListener('visibilitychange', this.onVisible);
     window.addEventListener('online', this.onOnline);
+    window.addEventListener('offline', this.onOffline);
   }
 
   stop() {
@@ -223,6 +226,7 @@ export class Live {
     this.timers = {};
     if (this.onVisible) document.removeEventListener('visibilitychange', this.onVisible);
     if (this.onOnline) window.removeEventListener('online', this.onOnline);
+    if (this.onOffline) window.removeEventListener('offline', this.onOffline);
     if (this.channel && this.client) {
       try { this.client.removeChannel(this.channel); } catch { /* 무시 */ }
     }
@@ -275,6 +279,22 @@ export class Live {
     this.emit(new Set(['status']));
   }
 
+  /**
+   * 화면에 보일 연결 상태: 'live'(실시간) | 'poll'(재조회) | 'offline'(끊김) | 'connecting'
+   * 실시간이 붙어 있으면 실시간이다. 아니면 마지막 불러오기가 연결 오류였을 때 끊김으로 본다.
+   */
+  get connection() {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return 'offline';
+    if (this.status === 'live') return 'live';
+    return this.netFail ? 'offline' : this.status;
+  }
+
+  markNet(ok) {
+    if (this.netFail === !ok) return;
+    this.netFail = !ok;
+    this.emit(new Set(['status']));
+  }
+
   tick() {
     // 실시간이 안 되면 매번, 붙어 있어도 가끔은 다시 불러와 빠진 알림을 메운다
     if (this.status !== 'live' || Date.now() - this.lastSettingsAt > SAFETY_POLL_MS) this.refreshAll();
@@ -320,27 +340,34 @@ export class Live {
 
   async fetchOnce(kind, changed) {
     try {
-      if (kind === 'settings') {
-        const r = await api.getEvent(this.eventId);
-        if (r && r.ok) for (const c of this.applyEvent(r)) changed.add(c);
-      } else if (kind === 'participants') {
-        const rows = await api.get(
-          `lw_participants?select=id,name,created_at,last_seen&event_id=eq.${encodeURIComponent(this.eventId)}&order=created_at.asc`);
-        if (Array.isArray(rows) && JSON.stringify(rows) !== JSON.stringify(this.data.participants)) {
-          this.data.participants = rows;
-          changed.add('participants');
-        }
-      } else if (kind === 'responses') {
-        const rows = await api.get(
-          `lw_responses?select=activity_id,participant_id,payload,created_at,updated_at&event_id=eq.${encodeURIComponent(this.eventId)}&order=updated_at.desc`);
-        if (Array.isArray(rows) && JSON.stringify(rows) !== JSON.stringify(this.data.responses)) {
-          this.data.responses = rows;
-          changed.add('responses');
-        }
-      }
+      await this.fetchKindRows(kind, changed);
+      this.markNet(true);
     } catch (e) {
       // 연결 오류는 다음 재조회 때 다시 해 본다
-      if (!(e instanceof ApiError)) console.error(e);
+      if (e instanceof ApiError) this.markNet(false);
+      else console.error(e);
+    }
+  }
+
+  /** 한 종류를 불러와 바뀌었으면 changed 에 적는다(연결 오류는 ApiError 로 던진다) */
+  async fetchKindRows(kind, changed) {
+    if (kind === 'settings') {
+      const r = await api.getEvent(this.eventId);
+      if (r && r.ok) for (const c of this.applyEvent(r)) changed.add(c);
+    } else if (kind === 'participants') {
+      const rows = await api.get(
+        `lw_participants?select=id,name,created_at,last_seen&event_id=eq.${encodeURIComponent(this.eventId)}&order=created_at.asc`);
+      if (Array.isArray(rows) && JSON.stringify(rows) !== JSON.stringify(this.data.participants)) {
+        this.data.participants = rows;
+        changed.add('participants');
+      }
+    } else if (kind === 'responses') {
+      const rows = await api.get(
+        `lw_responses?select=activity_id,participant_id,payload,created_at,updated_at&event_id=eq.${encodeURIComponent(this.eventId)}&order=updated_at.desc`);
+      if (Array.isArray(rows) && JSON.stringify(rows) !== JSON.stringify(this.data.responses)) {
+        this.data.responses = rows;
+        changed.add('responses');
+      }
     }
   }
 
@@ -364,6 +391,7 @@ export class Live {
 export function statusLabel(status) {
   if (status === 'live') return '실시간';
   if (status === 'poll') return `${Math.round(CONFIG.pollMs / 1000)}초마다 새로 고침`;
+  if (status === 'offline') return '연결 끊김';
   return '연결 중';
 }
 

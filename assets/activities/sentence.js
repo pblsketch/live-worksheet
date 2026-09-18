@@ -190,6 +190,120 @@ function adminResponse(ctx, row) {
     `${sentenceHTML(t, p.blank)}</div>`;
 }
 
+/* ───────────── 현황판 ───────────── */
+
+/** 새 문장을 노란 테두리로 보이는 시간(밀리초) */
+export const FRESH_MS = 12000;
+
+/** 현황판 카드 목록(응답 순서 = 최근 제출 순). key 는 다시 내면 바뀐다 */
+export function sentenceCards(activity, rows) {
+  return (rows || []).map((r) => {
+    const p = (r && r.payload) || {};
+    return {
+      key: `${r.participant_id}|${r.updated_at || r.created_at || ''}`,
+      pid: r.participant_id,
+      template: templateOf(activity, p.template),
+      blank: typeof p.blank === 'string' ? p.blank : ''
+    };
+  });
+}
+
+/**
+ * 새로 들어온 카드 고르기. seen(Map: key → 처음 본 시각)을 고친다.
+ * 처음 그릴 때(first) 이미 있던 카드는 새것으로 치지 않는다. 처음 본 뒤 ttl 동안 새것이다.
+ * @returns {Set<string>} 지금 강조할 key
+ */
+export function freshKeys(seen, keys, now, { first = false, ttl = FRESH_MS } = {}) {
+  for (const k of keys) if (!seen.has(k)) seen.set(k, first ? 0 : now);
+  const out = new Set();
+  for (const k of keys) {
+    const t = seen.get(k);
+    if (t > 0 && now - t < ttl) out.add(k);
+  }
+  return out;
+}
+
+/** 문장 카드 3열. 새 문장은 노란 테두리로 들어오고, 카드마다 틀 라벨과 이름을 붙인다 */
+function board(ctx) {
+  const a = ctx.activity;
+  const tpls = a.templates || [];
+  const root = ctx.root;
+  const keep = ctx.keep || {};
+  if (!keep.seen) keep.seen = new Map();
+  let cur = ctx;
+  let timer = null;
+  let raf = 0;
+
+  const nameOf = (pid) => (cur.names && cur.names.get(pid)) || '…';
+
+  function draw() {
+    clearTimeout(timer);
+    const rows = cur.rows;
+    if (!rows) {
+      root.innerHTML = '<div class="blank"><h2>불러오는 중…</h2></div>';
+      return;
+    }
+    const cards = sentenceCards(a, rows);
+    const now = Date.now();
+    const fresh = freshKeys(keep.seen, cards.map((c) => c.key), now, { first: !keep.ready });
+    keep.ready = true;
+
+    if (!cards.length) {
+      root.innerHTML = '<div class="blank"><h2>아직 문장이 없습니다</h2>' +
+        `<p>${cur.isOpen ? '문장이 들어오면 여기에 한 장씩 쌓입니다.' : '관리자 화면에서 이 활동을 열어 주세요.'}</p></div>`;
+      return;
+    }
+    const cols = [[], [], []];
+    cards.forEach((c, i) => {
+      const lb = c.template && c.template.label ? `<span class="tag">${rich(c.template.label)}</span>` : '';
+      cols[i % 3].push(
+        `<div class="sncard${fresh.has(c.key) ? ' fresh' : ''}" data-pid="${esc(c.pid)}">` +
+        `<div class="sh">${lb}<span class="nm">${esc(nameOf(c.pid))}</span></div>` +
+        `<div class="tx">${sentenceHTML(c.template, c.blank)}</div></div>`);
+    });
+    const counts = tpls.length > 1
+      ? '<div class="sn-top">' + tpls.map((t) => {
+        const n = cards.filter((c) => c.template && c.template.id === t.id).length;
+        return `<span class="sn-t"><span class="tag">${rich(t.label || t.id)}</span><b>${n}</b></span>`;
+      }).join('') + '<span class="sn-more" hidden></span></div>'
+      : '<div class="sn-top solo"><span class="sn-more" hidden></span></div>';
+    root.innerHTML = `<div class="sn">${counts}<div class="sn-cols">` +
+      cols.map((c) => `<div class="sn-col">${c.join('')}</div>`).join('') + '</div></div>';
+
+    // 칸에 다 들어가지 않는 오래된 카드는 반쯤 잘려 보이지 않게 숨기고 수만 알린다
+    cancelAnimationFrame(raf);
+    raf = requestAnimationFrame(() => {
+      let hidden = 0;
+      root.querySelectorAll('.sn-col').forEach((col) => {
+        const limit = col.clientHeight + 1;
+        col.querySelectorAll('.sncard').forEach((card) => {
+          if (card.offsetTop + card.offsetHeight > limit) { card.classList.add('cut'); hidden++; }
+        });
+      });
+      const more = root.querySelector('.sn-more');
+      if (more) {
+        more.hidden = hidden === 0;
+        more.textContent = hidden ? `화면 밖 ${hidden}개` : '';
+      }
+    });
+
+    if (fresh.size) timer = setTimeout(draw, FRESH_MS + 200); // 강조가 저절로 걷히게 한 번 더 그린다
+  }
+
+  draw();
+
+  return {
+    update(next) {
+      cur = next;
+      draw();
+    },
+    destroy() {
+      clearTimeout(timer);
+      cancelAnimationFrame(raf);
+    }
+  };
+}
+
 export default {
   type: 'sentence',
   typeLabel: '문장',
@@ -198,6 +312,5 @@ export default {
   adminCard,
   adminResponse,
   adminCell: () => '✓',
-  /** 현황판 화면(T4가 채운다) */
-  board: null
+  board
 };

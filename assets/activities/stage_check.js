@@ -397,6 +397,279 @@ function adminResponse(ctx, row) {
     }).join('');
 }
 
+/* ───────────── 현황판 계산 (순수 함수) ───────────── */
+
+/**
+ * 현황판 보기 목록: 전체 → 학습목표 보기(설정 순서) → 직접 적은 목표(허용할 때 한 묶음)
+ * key 는 'all' | 'o:<보기 id>' | 'custom'
+ */
+export function boardViews(activity) {
+  const views = [{ key: 'all', kind: 'all', label: '전체' }];
+  (activity.objectives || []).forEach((o, i) => {
+    views.push({ key: `o:${o.id}`, kind: 'objective', label: o.group || `목표 ${i + 1}`, objective: o });
+  });
+  if (activity.allowCustom === true) views.push({ key: 'custom', kind: 'custom', label: '직접 적은 목표' });
+  return views;
+}
+
+/** 보기 하나에 드는 응답만 고른다(view 는 보기 객체나 key) */
+export function rowsInView(rows, view) {
+  const key = typeof view === 'string' ? view : (view && view.key);
+  const list = rows || [];
+  if (!key || key === 'all') return list.slice();
+  return list.filter((r) => {
+    const o = r && r.payload && r.payload.objective;
+    if (!o || typeof o.id !== 'string') return false;
+    return key === 'custom' ? o.id === 'custom' : key === `o:${o.id}`;
+  });
+}
+
+/**
+ * 항목 × 단계 집계.
+ * items: [{ id, stage:[1~5단계 인원], tot(단계를 고른 사람), risk:{상,중,하}, riskTot }]
+ * memos: [{ item, pid, memo, at }] (응답 순서 = 최근 제출 순)
+ */
+export function heatmap(activity, rows) {
+  const defs = activity.items || [];
+  const items = defs.map((it) => ({ id: it.id, stage: [0, 0, 0, 0, 0], tot: 0, risk: { 상: 0, 중: 0, 하: 0 }, riskTot: 0 }));
+  const byId = new Map(items.map((x) => [x.id, x]));
+  const memos = [];
+  for (const r of rows || []) {
+    const its = (r && r.payload && r.payload.items) || {};
+    for (const it of defs) {
+      const v = its[it.id];
+      if (!v || typeof v !== 'object') continue;
+      const h = byId.get(it.id);
+      if (Number.isInteger(v.stage) && v.stage >= 1 && v.stage <= 5) { h.stage[v.stage - 1]++; h.tot++; }
+      if (RISKS.includes(v.risk)) { h.risk[v.risk]++; h.riskTot++; }
+      const m = oneLine(v.memo);
+      if (m) memos.push({ item: it.id, pid: r.participant_id, memo: m, at: r.updated_at || r.created_at || '' });
+    }
+  }
+  return { items, memos };
+}
+
+/** 「판단 갈림」 규칙(지학사 판과 같다) */
+export const SPLIT_RULE = Object.freeze({ minPeople: 5, maxShare: 0.45, minStages: 3, limit: 3 });
+
+/**
+ * 「판단 갈림」 항목: 단계를 고른 사람이 5명 이상이고, 최다 단계 비율이 0.45 미만이며,
+ * 쓰인 단계가 3개 이상인 항목 가운데 가장 갈린 3개까지.
+ * 정렬: 최다 비율 오름차순, 같으면 쓰인 단계 수 내림차순(그래도 같으면 항목 순서).
+ * @param {{ id: string, stage: number[] }[]} counts  heatmap(...).items 처럼 항목별 단계 인원
+ * @returns {{ id, tot, share, used }[]}
+ */
+export function splitItems(counts, rule = SPLIT_RULE) {
+  return (counts || []).map((c) => {
+    const st = Array.isArray(c.stage) ? c.stage : [];
+    const tot = st.reduce((s, x) => s + x, 0);
+    const max = st.reduce((s, x) => Math.max(s, x), 0);
+    const used = st.filter((x) => x > 0).length;
+    return { id: c.id, tot, share: tot ? max / tot : 1, used };
+  })
+    .filter((s) => s.tot >= rule.minPeople && s.share < rule.maxShare && s.used >= rule.minStages)
+    .sort((p, q) => (p.share - q.share) || (q.used - p.used))
+    .slice(0, rule.limit);
+}
+
+/** 보기 하나(전체 또는 학습목표 하나)의 응답만으로 판단 갈림을 계산한다 */
+export function splitInView(activity, rows, view) {
+  return splitItems(heatmap(activity, rowsInView(rows, view)).items);
+}
+
+/* ───────────── 현황판 화면 ───────────── */
+
+function hexA(hex, a) {
+  const h = String(hex).replace('#', '');
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return `rgba(${r},${g},${b},${a.toFixed(3)})`;
+}
+
+/**
+ * 항목 × 단계 히트맵, 위험 분포, 판단 갈림, 메모(이름과 함께).
+ * ↑ ↓(또는 위쪽 버튼)로 보기를 바꾼다: 전체 → 학습목표별 → 직접 적은 목표
+ */
+function board(ctx) {
+  const a = ctx.activity;
+  const items = a.items || [];
+  const stages = stagesOf(a);
+  const views = boardViews(a);
+  const keep = ctx.keep || {};
+  let vi = Math.max(0, views.findIndex((v) => v.key === keep.view));
+  let cur = ctx;
+  const root = ctx.root;
+
+  root.innerHTML =
+    '<div class="sc">' +
+    '<div class="sc-views" role="tablist" aria-label="학습목표 보기"></div>' +
+    '<div class="sc-obj"></div>' +
+    '<div class="sc-body"><div class="sc-main"></div><aside class="sc-side"></aside></div>' +
+    '</div>';
+  const el = {
+    sc: root.querySelector('.sc'),
+    views: root.querySelector('.sc-views'),
+    obj: root.querySelector('.sc-obj'),
+    main: root.querySelector('.sc-main'),
+    side: root.querySelector('.sc-side')
+  };
+  el.views.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-view]');
+    if (!b) return;
+    const i = views.findIndex((v) => v.key === b.dataset.view);
+    if (i >= 0) select(i);
+  });
+
+  function select(i) {
+    vi = (i + views.length) % views.length;
+    keep.view = views[vi].key;
+    draw();
+  }
+
+  const nameOf = (pid) => (cur.names && cur.names.get(pid)) || '…';
+
+  function objHTML(v) {
+    if (v.kind === 'all') {
+      return '<span class="og">전체</span><span class="ot">학습목표 구분 없이 모든 응답을 합쳤습니다.</span>';
+    }
+    if (v.kind === 'custom') {
+      return '<span class="og">직접 적은 목표</span><span class="ot">보기에 없는 목표를 직접 적은 응답만 모았습니다.</span>';
+    }
+    const o = v.objective;
+    return `<span class="og">${rich(v.label)}</span><span class="ot">${rich(o.text)}</span>` +
+      (o.code ? `<span class="oc">${esc(o.code)}</span>` : '');
+  }
+
+  function blankHTML(title, desc) {
+    return `<div class="blank"><h2>${esc(title)}</h2><p>${desc}</p></div>`;
+  }
+
+  function tableHTML(heat, split) {
+    const head =
+      '<div class="hm-h it">항목</div>' +
+      stages.map((s) =>
+        `<div class="hm-h st"><span class="sn" style="background:${s.color}">${s.n}</span>` +
+        `<span class="sl">${esc(s.name)}</span></div>`).join('') +
+      '<div class="hm-h rk">외주화 위험</div>';
+    const body = items.map((it, k) => {
+      const h = heat.items[k];
+      const max = Math.max(0, ...h.stage);
+      const isSplit = split.has(it.id);
+      const cells = stages.map((s, j) => {
+        const c = h.stage[j];
+        if (!c) return `<div class="cell zero" data-cell="${esc(it.id)}:${s.n}">·</div>`;
+        const alpha = 0.18 + 0.82 * (max ? c / max : 0);
+        return `<div class="cell" data-cell="${esc(it.id)}:${s.n}" style="background:${hexA(s.color, alpha)};` +
+          `color:${alpha > 0.55 ? '#fff' : 'var(--ink)'}">${c}</div>`;
+      }).join('');
+      const rt = h.riskTot;
+      const seg = (k2, cls) => {
+        const n = h.risk[k2];
+        if (!n) return '';
+        const w = (n / rt) * 100;
+        return `<i class="${cls}" style="width:${w.toFixed(2)}%">${w >= 16 ? n : ''}</i>`;
+      };
+      const risk = `<div class="risk" data-risk="${esc(it.id)}">` +
+        (rt ? seg('상', 'h') + seg('중', 'm') + seg('하', 'l') : '<span class="none">·</span>') + '</div>';
+      // 판단 갈림 표시는 둘째 줄 앞에 둔다(항목 이름이 두 줄로 밀리지 않게)
+      return `<div class="hm-it${isSplit ? ' split' : ''}" data-item="${esc(it.id)}">` +
+        `<div class="nm"><span class="no">${k + 1}</span><span class="tx">${rich(it.name)}</span></div>` +
+        (isSplit || it.desc
+          ? `<div class="ds">${isSplit ? '<span class="flag">판단 갈림</span> ' : ''}${it.desc ? rich(it.desc) : ''}</div>`
+          : '') +
+        '</div>' + cells + risk;
+    }).join('');
+    return `<div class="hm" style="--rows:${items.length}">${head}${body}</div>` +
+      '<div class="hm-legend">' +
+      '<span>숫자 = 그 단계를 고른 사람 수 · 진할수록 몰림</span>' +
+      '<span class="sw"><b style="background:var(--red)"></b>위험 상</span>' +
+      '<span class="sw"><b style="background:var(--amber)"></b>중</span>' +
+      '<span class="sw"><b style="background:var(--green)"></b>하</span>' +
+      '<span class="sw"><b class="fl"></b>판단 갈림 = 5명 이상 고른 항목 가운데 가장 갈린 곳</span>' +
+      '</div>';
+  }
+
+  function memosHTML(heat) {
+    const nameOfItem = new Map(items.map((it) => [it.id, it.name]));
+    const list = heat.memos;
+    return `<div class="side-h">배움을 지키는 장치 <span>${list.length}개</span></div>` +
+      (list.length
+        ? '<div class="side-list">' + list.map((m) =>
+          '<div class="memo">' +
+          `<div class="mt">${esc(m.memo)}</div>` +
+          `<div class="mw"><span class="mi">${rich(nameOfItem.get(m.item) || '')}</span>` +
+          `<span class="mn">${esc(nameOf(m.pid))}</span></div>` +
+          '</div>').join('') + '</div>'
+        : '<div class="side-empty">아직 적은 장치가 없습니다.</div>');
+  }
+
+  function customHTML(vrows) {
+    return `<div class="side-h">직접 적은 목표 <span>${vrows.length}명</span></div>` +
+      '<div class="side-list cobjs">' + vrows.map((r) =>
+        '<div class="cobj">' +
+        `<div class="ct">${esc((r.payload && r.payload.objective && r.payload.objective.text) || '')}</div>` +
+        `<div class="cn">${esc(nameOf(r.participant_id))}</div>` +
+        '</div>').join('') + '</div>';
+  }
+
+  function draw() {
+    const rows = cur.rows;
+    const v = views[vi];
+    el.sc.dataset.view = v.key;
+    el.views.innerHTML = views.map((x, i) => {
+      const n = rows ? rowsInView(rows, x).length : 0;
+      return `<button type="button" class="vt${i === vi ? ' on' : ''}${n ? '' : ' empty'}" role="tab" ` +
+        `aria-selected="${i === vi}" data-view="${esc(x.key)}">` +
+        `<span class="vl">${x.kind === 'objective' ? rich(x.label) : esc(x.label)}</span><span class="vn">${n}</span></button>`;
+    }).join('');
+    if (!rows) {
+      el.obj.innerHTML = '';
+      el.main.innerHTML = blankHTML('불러오는 중…', '');
+      el.side.innerHTML = '';
+      el.side.hidden = true;
+      return;
+    }
+    const vrows = rowsInView(rows, v);
+    el.obj.innerHTML = objHTML(v);
+    el.obj.className = `sc-obj ${v.kind}`;
+
+    if (!rows.length) {
+      el.main.innerHTML = blankHTML('아직 제출이 없습니다',
+        cur.isOpen ? '제출이 들어오면 항목별 허용 단계 분포가 여기에 채워집니다.'
+          : '관리자 화면에서 이 활동을 열어 주세요.');
+      el.side.hidden = true;
+      return;
+    }
+    if (!vrows.length) {
+      el.main.innerHTML = blankHTML('이 보기에는 아직 응답이 없습니다',
+        v.kind === 'custom' ? '학습목표를 직접 적은 사람이 아직 없습니다.' : '이 학습목표를 고른 사람이 아직 없습니다.');
+      el.side.hidden = true;
+      return;
+    }
+    const heat = heatmap(a, vrows);
+    const split = new Set(splitItems(heat.items).map((s) => s.id));
+    el.main.innerHTML = tableHTML(heat, split);
+    el.side.hidden = false;
+    el.side.innerHTML = (v.kind === 'custom' ? customHTML(vrows) : '') + memosHTML(heat);
+  }
+
+  draw();
+
+  return {
+    update(next) {
+      cur = next;
+      draw();
+    },
+    onKey(key) {
+      if (key === 'ArrowDown') { select(vi + 1); return true; }
+      if (key === 'ArrowUp') { select(vi - 1); return true; }
+      return false;
+    },
+    destroy() {}
+  };
+}
+
 export default {
   type: 'stage_check',
   typeLabel: '단계 판단',
@@ -405,6 +678,5 @@ export default {
   adminCard,
   adminResponse,
   adminCell: () => '✓',
-  /** 현황판 화면(T4가 채운다) */
-  board: null
+  board
 };

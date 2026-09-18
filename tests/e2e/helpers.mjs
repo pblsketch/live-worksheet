@@ -5,8 +5,30 @@
  */
 import {
   testId, testPasscode, tmpDir, removeDir, samplePublic, sampleSecret,
-  writeEventFiles, registerCli, deleteEvents, runSql
+  writeEventFiles, registerCli, deleteEvents, runSql, call
 } from '../db/helpers.mjs';
+
+/**
+ * 시험 연수에 가짜 참가자·응답을 넣는 도구. 브라우저와 같은 서버 함수(publishable key)를 그대로 부른다.
+ *   const s = seeder(EV);  await s.open('ox1');  const pid = await s.join('이름');  await s.submit(pid, 'ox1', {...})
+ */
+export function seeder(ev) {
+  const ok = (fn) => async (args) => {
+    const r = await call(fn, args);
+    if (!r || r.ok !== true) throw new Error(`${fn} 실패: ${JSON.stringify(r).slice(0, 300)}`);
+    return r;
+  };
+  const set = ok('lw_admin_set');
+  const join = ok('lw_join');
+  const submit = ok('lw_submit');
+  return {
+    set: (key, value) => set({ p_event_id: ev.id, p_key: key, p_value: value, p_passcode: ev.passcode }),
+    open: (activityId) => set({ p_event_id: ev.id, p_key: `open:${activityId}`, p_value: 'Y', p_passcode: ev.passcode }),
+    join: async (name) => (await join({ p_event_id: ev.id, p_name: name, p_mode: 'new' })).participant.id,
+    submit: (pid, activityId, payload) =>
+      submit({ p_event_id: ev.id, p_participant_id: pid, p_activity_id: activityId, p_payload: payload })
+  };
+}
 
 /**
  * events/sample.json 으로 시험 연수를 만든다(관리자 암호는 새로 만든 것).

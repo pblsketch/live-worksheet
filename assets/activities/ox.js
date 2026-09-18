@@ -250,6 +250,129 @@ function adminCell(ctx, row) {
   return `${scoreOf((row.payload || {}).answers, correct)}/${(ctx.activity.questions || []).length}`;
 }
 
+/* ───────────── 현황판 ───────────── */
+
+/**
+ * 현황판에 그릴 값. 정답이 공개되지 않았으면(reveal 에 answers 가 없으면)
+ * 정답·라벨·해설·점수·패널을 하나도 담지 않는다.
+ * @returns {{ total, revealed, questions:[{q,O,X,n,pO,pX,right,label,note}], avg, dist, panel:[{name,desc,picks,marks,score}] }}
+ *   dist[k] = k개 맞힌 사람 수
+ */
+export function oxSummary(activity, rows, reveal) {
+  const qs = activity.questions || [];
+  const list = rows || [];
+  const t = tally(activity, list);
+  const correct = reveal && Array.isArray(reveal.answers) ? reveal.answers : null;
+  const pick = (arr, i) => (correct && Array.isArray(arr) && typeof arr[i] === 'string' ? arr[i] : '');
+  const questions = qs.map((q, i) => {
+    const { O, X } = t[i];
+    const n = O + X;
+    const pO = n ? Math.round((O / n) * 100) : 0;
+    return {
+      q, O, X, n, pO, pX: n ? 100 - pO : 0,
+      right: correct ? (correct[i] || null) : null,
+      label: pick(reveal && reveal.labels, i),
+      note: pick(reveal && reveal.notes, i)
+    };
+  });
+  if (!correct) return { total: list.length, revealed: false, questions, avg: null, dist: null, panel: [] };
+  const scores = list.map((r) => scoreOf((r.payload || {}).answers, correct) || 0);
+  const avg = scores.length ? scores.reduce((s, x) => s + x, 0) / scores.length : null;
+  const dist = qs.map(() => 0).concat(0);
+  for (const s of scores) if (dist[s] !== undefined) dist[s]++;
+  const panel = (Array.isArray(reveal.panel) ? reveal.panel : []).map((p) => {
+    const picks = qs.map((_, i) => (Array.isArray(p.picks) && (p.picks[i] === 'O' || p.picks[i] === 'X') ? p.picks[i] : ''));
+    return {
+      name: p.name || '',
+      desc: p.desc || '',
+      picks,
+      marks: picks.map((v, i) => v === correct[i]),
+      score: scoreOf(picks, correct)
+    };
+  });
+  return { total: list.length, revealed: true, questions, avg, dist, panel };
+}
+
+/** 문항별 O/X 막대와 인원. 공개 뒤에는 정답 테두리와 패널 성적표 */
+function board(ctx) {
+  const a = ctx.activity;
+  const root = ctx.root;
+  let cur = ctx;
+
+  function bar(x) {
+    if (!x.n) return '<div class="oxbar"><span class="none">아직 응답이 없습니다</span></div>';
+    const seg = (v, cnt, pct) => (cnt
+      ? `<span class="${v.toLowerCase()}${x.right === v ? ' right' : ''}" style="width:${pct}%" data-seg="${v}">` +
+        `<b>${v} ${pct}%</b><small>${cnt}명</small></span>`
+      : '');
+    return `<div class="oxbar">${seg('O', x.O, x.pO)}${seg('X', x.X, x.pX)}</div>`;
+  }
+
+  function sideHTML(s) {
+    const N = s.questions.length;
+    const panel = s.panel.length
+      ? '<div class="side-h">패널 성적표</div>' +
+        '<table class="oxpanel"><thead><tr><th></th>' +
+        s.questions.map((_, i) => `<th>${i + 1}</th>`).join('') + '<th>합계</th></tr></thead><tbody>' +
+        s.panel.map((p) =>
+          `<tr><td class="nm">${esc(p.name)}${p.desc ? `<small>${esc(p.desc)}</small>` : ''}</td>` +
+          p.picks.map((v, i) => `<td>${esc(v || '·')}<span class="${p.marks[i] ? 'ok' : 'no'}">${p.marks[i] ? '✓' : '✗'}</span></td>`).join('') +
+          `<td class="sum"><b>${p.score}/${N}</b></td></tr>`).join('') +
+        '</tbody></table>'
+      : '';
+    const maxD = Math.max(1, ...(s.dist || [0]));
+    const dist = s.total
+      ? '<div class="dist">' + s.dist.map((c, k) => ({ c, k })).reverse().map(({ c, k }) =>
+        `<div class="dr"><span class="dk">${k}개 맞힘</span>` +
+        `<span class="dt"><i style="width:${((c / maxD) * 100).toFixed(1)}%"></i></span><b>${c}명</b></div>`).join('') + '</div>'
+      : '';
+    return panel +
+      '<div class="side-h">오늘 여기</div>' +
+      (s.total
+        ? `<div class="ours"><span class="ov">${s.avg.toFixed(1)}<small>/ ${N}</small></span>` +
+          `<span class="ol">${s.total}명 평균</span></div>${dist}`
+        : '<div class="side-empty">아직 낸 사람이 없습니다.</div>');
+  }
+
+  function draw() {
+    const rows = cur.rows;
+    if (!rows) {
+      root.innerHTML = '<div class="blank"><h2>불러오는 중…</h2></div>';
+      return;
+    }
+    const s = oxSummary(a, rows, cur.reveal);
+    const cO = caption(a, 'O');
+    const cX = caption(a, 'X');
+    // 공개 전: 문항 · 막대 · O/X 설명. 공개 뒤: 문항 · 막대(정답 테두리) · 정답 표시와 해설
+    const qs = s.questions.map((x, i) =>
+      `<div class="oxq" data-q="${i + 1}">` +
+      `<div class="qt"><span class="n">${i + 1}</span><span class="qx">${esc(x.q)}</span></div>` +
+      bar(x) +
+      (x.right
+        ? `<div class="cm"><span class="ans">정답 ${esc(x.right)}${x.label ? ` · ${esc(x.label)}` : ''}</span>` +
+          `${x.note ? `<span class="nt">${esc(x.note)}</span>` : ''}</div>`
+        : '<div class="lg">' +
+          `<span>O${cO ? ` · ${esc(cO)}` : ''} <b>${x.O}명</b></span>` +
+          `<span>X${cX ? ` · ${esc(cX)}` : ''} <b>${x.X}명</b></span></div>`) +
+      '</div>').join('');
+    root.innerHTML =
+      `<div class="ox${s.revealed ? ' rv' : ''}">` +
+      `<div class="ox-qs" style="--q:${Math.max(1, s.questions.length)}">${qs}</div>` +
+      (s.revealed ? `<aside class="ox-side">${sideHTML(s)}</aside>` : '') +
+      '</div>';
+  }
+
+  draw();
+
+  return {
+    update(next) {
+      cur = next;
+      draw();
+    },
+    destroy() {}
+  };
+}
+
 export default {
   type: 'ox',
   typeLabel: 'O·X',
@@ -258,6 +381,5 @@ export default {
   adminCard,
   adminResponse,
   adminCell,
-  /** 현황판 화면(T4가 채운다) */
-  board: null
+  board
 };
