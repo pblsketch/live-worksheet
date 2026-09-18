@@ -1,0 +1,12 @@
+.env.local
+events/*.secret.json
+node_modules
+.omc/
+.gjc/
+.claude/
+test-results/
+playwright-report/
+.DS_Store
+Thumbs.db
+supabase/.temp/
+supabase/.branches/
