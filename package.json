@@ -1,0 +1,16 @@
+{
+  "name": "live-worksheet",
+  "version": "1.0.0",
+  "private": true,
+  "description": "여러 연수에 다시 쓰는 라이브 활동지 (정적 사이트 + Supabase)",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "migrate": "node tools/apply-migrations.mjs",
+    "snapshot": "node tools/apply-migrations.mjs --snapshot",
+    "register": "node tools/register-event.mjs",
+    "test:db": "node --test --test-concurrency=1 \"tests/db/*.test.mjs\""
+  }
+}
