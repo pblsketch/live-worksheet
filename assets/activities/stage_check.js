@@ -576,7 +576,7 @@ function board(ctx) {
       return `<div class="hm-it${isSplit ? ' split' : ''}" data-item="${esc(it.id)}">` +
         `<div class="nm"><span class="no">${k + 1}</span><span class="tx">${rich(it.name)}</span></div>` +
         (isSplit || it.desc
-          ? `<div class="ds">${isSplit ? '<span class="flag">판단 갈림</span> ' : ''}${it.desc ? rich(it.desc) : ''}</div>`
+          ? `<div class="ds">${isSplit ? '<span class="flag">판단 갈림</span> ' : ''}${it.desc ? `<span class="dtx">${rich(it.desc)}</span>` : ''}</div>`
           : '') +
         '</div>' + cells + risk;
     }).join('');
@@ -650,9 +650,28 @@ function board(ctx) {
     const heat = heatmap(a, vrows);
     const split = new Set(splitItems(heat.items).map((s) => s.id));
     el.main.innerHTML = tableHTML(heat, split);
+    fitDescs();
+    requestAnimationFrame(fitDescs);
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(fitDescs);
     el.side.hidden = false;
     el.side.innerHTML = (v.kind === 'custom' ? customHTML(vrows) : '') + memosHTML(heat);
   }
+
+  // 항목 설명이 한 줄에 다 들어가지 않으면 말줄임표로 자르지 않고 숨긴다(프로젝터에서 잘린 글이 보이지 않게)
+  function fitDescs() {
+    for (const ds of el.main.querySelectorAll('.hm-it .ds')) {
+      const dt = ds.querySelector('.dtx');
+      if (!dt) continue;
+      dt.hidden = false;
+      ds.hidden = false;
+      if (ds.scrollWidth > ds.clientWidth + 1) {
+        dt.hidden = true;
+        if (!ds.querySelector('.flag')) ds.hidden = true;
+      }
+    }
+  }
+  const onResize = () => fitDescs();
+  window.addEventListener('resize', onResize);
 
   draw();
 
@@ -666,7 +685,7 @@ function board(ctx) {
       if (key === 'ArrowUp') { select(vi - 1); return true; }
       return false;
     },
-    destroy() {}
+    destroy() { window.removeEventListener('resize', onResize); }
   };
 }
 
