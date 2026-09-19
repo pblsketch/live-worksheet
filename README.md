@@ -24,7 +24,7 @@
 
 ## 처음 한 번: 내 컴퓨터 준비
 
-1. Node 22 이상을 설치하고 `npm install`을 실행합니다.
+1. Node 22 이상을 설치하고 `npm install`을 실행합니다. 브라우저 E2E를 돌리려면 `npx playwright install chromium`도 한 번 실행합니다.
 2. 저장소 맨 위에 `.env.local` 파일을 만들고 네 줄을 적습니다. 이 파일은 저장소에 올라가지 않습니다.
    ```
    SUPABASE_PROJECT_REF=<프로젝트 ref>

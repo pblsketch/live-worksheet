@@ -248,7 +248,7 @@ export class Live {
       let ch = this.client.channel(`lw-${this.eventId}-${Math.random().toString(36).slice(2, 8)}`);
       for (const table of Object.keys(TABLE_KIND)) {
         ch = ch.on('postgres_changes', { event: '*', schema: 'public', table, filter }, (msg) => {
-          // 참가자 행은 제출할 때마다 last_seen 만 바뀐다. 알고 있는 이름 그대로면 다시 받지 않는다
+          // 참가자 행 UPDATE는 입장·복원 때 last_seen 만 바뀐 것이다(제출은 참가자 행을 고치지 않는다, 0004). 이름이 그대로면 다시 받지 않는다
           if (table === 'lw_participants' && msg && msg.eventType === 'UPDATE' && msg.new && this.data.participants) {
             const known = this.data.participants.find((p) => p.id === msg.new.id);
             if (known && known.name === msg.new.name) return;
