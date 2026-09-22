@@ -230,6 +230,9 @@ test('휴대폰 참가자: 입장 → 대기 → 관리자가 PC 화면에서 �
 
     await expect(p.locator('#blank')).toBeDisabled();
     await p.locator('input[name="tpl"][value="teacher"]').check();
+    // 둘 중 하나만: 고른 틀은 강조, 고르지 않은 틀은 흐리게
+    await expect(p.locator('.tpl.on')).toHaveCount(1);
+    await expect(p.locator('.tpl.off')).toHaveCount(1);
     await expect(p.locator('#blank')).toBeEnabled();
     await p.locator('#blank').fill(BLANK);
     await expect(p.locator('#pv .blank')).toHaveText(BLANK);

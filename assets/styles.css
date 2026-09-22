@@ -311,8 +311,10 @@ details.crit[open] summary{margin-bottom:10px}
 }
 .tpl input{position:absolute;left:15px;top:16px;margin:0;accent-color:var(--blue);width:17px;height:17px}
 .tpl.on{border-color:var(--blue);background:var(--card-blue)}
-.tpl-lb{font-size:12px;font-weight:700;color:var(--blue)}
-.tpl-tx{font-family:'Noto Serif KR',serif;font-size:14.5px;line-height:1.7}
+.tpl.off{opacity:.5}
+.tpl.off:hover{opacity:.8}
+.tpl-lb{font-size:13px;font-weight:700;color:var(--blue)}
+.tpl-tx{font-family:'Noto Serif KR',serif;font-size:16px;line-height:1.7}
 .tpl-tx i{font-style:normal;color:var(--amber);font-weight:700}
 
 .fill{

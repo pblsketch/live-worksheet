@@ -1,6 +1,6 @@
 {
   "id": "bangok1015",
-  "title": "교사와 학생은 AI를 어떻게 비판적으로 활용해야 할까: 수행평가에서 세특까지",
+  "title": "교사와 학생은 AI를 어떻게 비판적으로 활용해야 할까: 수행평가에서 세특 작성까지",
   "date": "2026-10-15",
   "listed": true,
   "description": "세종 반곡고등학교 교원 연수",
@@ -127,7 +127,7 @@
       "id": "pledge",
       "type": "sentence",
       "title": "한 줄 선언",
-      "description": "두 갈래 가운데 하나를 골라 빈칸을 채우세요.",
+      "description": "학생 쪽과 교사 쪽 가운데 하나만 골라 빈칸을 채우세요. 한 사람이 한 문장을 냅니다.",
       "templates": [
         {
           "id": "student",

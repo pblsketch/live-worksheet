@@ -41,7 +41,7 @@ function participant(ctx) {
 
   function previewHTML() {
     const t = templateOf(a, form.template);
-    if (!t) return '<div class="fill muted-fill">틀을 고르면 여기에 문장이 나옵니다.</div>';
+    if (!t) return '<div class="fill muted-fill">하나를 고르면 여기에 문장이 나옵니다.</div>';
     const b = oneLine(form.blank);
     return '<div class="fill">' +
       (t.before ? `${rich(t.before)} ` : '') +
@@ -53,16 +53,16 @@ function participant(ctx) {
     root.innerHTML =
       (a.description ? `<div class="hint lead">${rich(a.description)}</div>` : '') +
       (multi
-        ? '<div class="step"><span>1</span>문장 틀 고르기</div>' +
+        ? `<div class="step"><span>1</span>${tpls.length === 2 ? '둘 중 하나를 고르세요' : `${tpls.length}개 가운데 하나를 고르세요`}</div>` +
           '<div class="tpls" id="tpls">' +
           tpls.map((t) =>
-            `<label class="tpl${form.template === t.id ? ' on' : ''}">` +
+            `<label class="tpl${form.template === t.id ? ' on' : (form.template ? ' off' : '')}">` +
             `<input type="radio" name="tpl" value="${esc(t.id)}"${form.template === t.id ? ' checked' : ''}>` +
             `<span class="tpl-lb">${rich(t.label || '')}</span>` +
             `<span class="tpl-tx">${t.before ? rich(t.before) : ''} <i>____</i> ${t.after ? rich(t.after) : ''}</span>` +
             '</label>').join('') +
           '</div>' +
-          '<div class="step"><span>2</span>빈칸 채우기</div>'
+          '<div class="step"><span>2</span>고른 문장의 빈칸 채우기</div>'
         : '') +
       `<div id="pv">${previewHTML()}</div>` +
       '<div class="field">' +
@@ -82,7 +82,11 @@ function participant(ctx) {
       tp.addEventListener('change', (e) => {
         if (e.target.name !== 'tpl') return;
         form.template = e.target.value;
-        tp.querySelectorAll('.tpl').forEach((l) => l.classList.toggle('on', l.querySelector('input').checked));
+        tp.querySelectorAll('.tpl').forEach((l) => {
+          const on = l.querySelector('input').checked;
+          l.classList.toggle('on', on);
+          l.classList.toggle('off', !on);   // 고르지 않은 쪽은 흐리게: 한 문장만 낸다는 것이 보이게
+        });
         ta.disabled = false;
         save();
         root.querySelector('#pv').innerHTML = previewHTML();
@@ -94,7 +98,7 @@ function participant(ctx) {
 
   async function submit(e) {
     const btn = e.currentTarget;
-    if (!templateOf(a, form.template)) { cur.toast('문장 틀을 골라 주세요.'); return; }
+    if (!templateOf(a, form.template)) { cur.toast('문장을 하나 먼저 골라 주세요.'); return; }
     const b = oneLine(form.blank);
     if (!b) { cur.toast('빈칸을 채워 주세요.'); return; }
     if (len(b) < MIN) { cur.toast('조금만 더 구체적으로 적어 주세요.'); return; }
