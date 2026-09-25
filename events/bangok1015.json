@@ -149,13 +149,13 @@
       "kind": "자료",
       "title": "강의 자료 공유본(PDF)",
       "desc": "오늘 슬라이드를 PDF로 묶었습니다",
-      "url": ""
+      "url": "https://drive.google.com/file/d/1ogLIohUN9zKIDXVnQmdy7xkDZwwbR7R7/view?usp=sharing"
     },
     {
       "kind": "자료",
       "title": "활동지 15종",
       "desc": "AI 활용 수업에 쓰는 활동지 모음",
-      "url": "https://drive.google.com/file/d/1_wdlupGvzqTuVNAIRtdDTLCqIVHzxNEk/view?usp=sharing"
+      "url": "https://drive.google.com/file/d/1QpkCkeFjMiulQaWHF1LPnexFzviY0zqV/view?usp=sharing"
     },
     {
       "kind": "자료",
@@ -168,6 +168,12 @@
       "title": "AI 활용 수업 설계 루브릭 · 8준거",
       "desc": "수업 하나를 통째로 볼 때 · 교과 협의회용",
       "url": "materials/shared/rubric.html"
+    },
+    {
+      "kind": "자료",
+      "title": "자료 한꺼번에 내려받기",
+      "desc": "강의 PDF·활동지·9가지 목적·루브릭 파일 · 구글 드라이브 폴더",
+      "url": "https://drive.google.com/drive/folders/15ZrAeoIxU4oJYMIl3ZVGj1YrtXo2xmsz?usp=sharing"
     },
     {
       "kind": "도구",
